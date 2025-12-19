@@ -1,0 +1,47 @@
+{
+	"lsp": {
+		"luau-lsp": {
+			"settings": {
+				"luau-lsp": {
+					"ignoreGlobs": [
+						"**/roblox_packages/**",
+						"**/luau_packages/**",
+						"**/lune_packages/**",
+						"**/serve/**"
+					],
+					"completion": {
+						"enabled": true,
+						"autocompleteEnd": true,
+						"addParentheses": false,
+						"fillCallArguments": false,
+						"imports": {
+							"enabled": true,
+							"suggestServices": true,
+							"suggestRequires": true,
+							"requireStyle": "Auto",
+							"stringRequires": {
+								"enabled": true
+							},
+							"separateGroupsWithLine": true,
+							"ignoreGlobs": [
+								"**/roblox_packages/**",
+								"**/luau_packages/**",
+								"**/lune_packages/**",
+								"**/serve/**"
+							]
+						}
+					}
+				},
+				"roblox": {
+					"enabled": false
+				},
+				"fflags": {
+					"enable_by_default": true,
+					"enable_new_solver": true,
+					"sync": true,
+					"override": {}
+				}
+			}
+		}
+	}
+}
