@@ -1,0 +1,18 @@
+{
+	"name": "ecs",
+	"tree": {
+		"$className": "DataModel",
+		"ReplicatedStorage": {
+			"$className": "ReplicatedStorage",
+			"ecs": {
+				"$className": "Folder",
+				"ecs": {
+					"$path": "src/ecs.luau"
+				},
+				"tests": {
+					"$path": "tests"
+				}
+			}
+		}
+	}
+}

@@ -3,12 +3,13 @@
 		"luau-lsp": {
 			"settings": {
 				"luau-lsp": {
-					"ignoreGlobs": [
-						"**/roblox_packages/**",
-						"**/luau_packages/**",
-						"**/lune_packages/**",
-						"**/serve/**"
-					],
+					"sourcemap": {
+						"enabled": true,
+						"autogenerate": true,
+						"rojoProjectFile": "serve.project.json",
+						"includeNonScripts": true,
+						"sourcemapFile": "sourcemap.json",
+					},
 					"completion": {
 						"enabled": true,
 						"autocompleteEnd": true,
@@ -20,28 +21,26 @@
 							"suggestRequires": true,
 							"requireStyle": "Auto",
 							"stringRequires": {
-								"enabled": true
+								"enabled": false,
 							},
 							"separateGroupsWithLine": true,
-							"ignoreGlobs": [
-								"**/roblox_packages/**",
-								"**/luau_packages/**",
-								"**/lune_packages/**",
-								"**/serve/**"
-							]
-						}
-					}
+							"ignoreGlobs": [],
+						},
+					},
 				},
 				"roblox": {
-					"enabled": false
+					"enabled": true,
+					"security_level": "plugin",
+					"download_api_documentation": true,
+					"download_definitions": true,
 				},
 				"fflags": {
 					"enable_by_default": true,
 					"enable_new_solver": true,
 					"sync": true,
-					"override": {}
-				}
-			}
-		}
-	}
+					"override": {},
+				},
+			},
+		},
+	},
 }
