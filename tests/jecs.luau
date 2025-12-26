@@ -1278,11 +1278,11 @@ local function query_archetypes(query: query)
 		end
 
 		local without = query.filter_without
-
 		for archetype_id in idr.records do
 			local archetype = archetypes[archetype_id]
 			local columns_map = archetype.columns_map
 			local skip = false
+
 			for _, component in with do
 				if not columns_map[component] then
 					skip = true
@@ -1292,6 +1292,7 @@ local function query_archetypes(query: query)
 			if skip then
 				continue
 			end
+
 			if without then
 				for _, component in without do
 					if columns_map[component] then
@@ -1300,7 +1301,6 @@ local function query_archetypes(query: query)
 					end
 				end
 			end
-
 			if skip then
 				continue
 			end

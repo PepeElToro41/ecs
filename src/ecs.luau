@@ -1,5 +1,6 @@
---!native
 --!optimize 2
+--!native
+--!strict
 
 type u24 = number
 type u53 = number
@@ -45,6 +46,7 @@ export type Archetype = {
 	entities: { Entity },
 	columns: Array<Column>,
 	components: Array<u53>,
+	component_bitsets: { Bitset },
 
 	columns_map: { [u53]: Column },
 	forward_edges: Map<u53, Archetype>,
@@ -60,8 +62,8 @@ export type EntityRecord = {
 }
 
 export type ComponentRecord = {
-	column_index: Map<Archetype, number>,
-	id_count: Map<Archetype, number>,
+	column_index: Map<ArchetypeId, number>,
+	id_count: Map<ArchetypeId, number>,
 
 	-- only defined for pair(rel, *)
 	pair_records: Map<u53, ComponentRecord>?,
@@ -94,6 +96,7 @@ export type World = {
 	archetype_deactivation_observers: Map<u53, { ArchetypeObserver }>,
 
 	entity: () -> Entity,
+	tag: () -> Entity,
 	component: <T>() -> Component<T>,
 
 	has: (entity: Entity, id: Component) -> boolean,
@@ -157,7 +160,9 @@ local ENTITY_MASK = bit32.lshift(1, 24)
 local GENERATION_MASK = bit32.lshift(1, 16)
 local PAIR_OFFSET = 2 ^ 48
 
-local RANGE_PAGE_SIZE = 2 ^ 12
+local BITSET_RANGE = 32
+local BITSET_PAGE_SIZE = 8
+local BITSET_MAX_ID = BITSET_RANGE * BITSET_PAGE_SIZE
 
 local ECS_WILDCARD = MAX_COMPONENT_ID + 1
 local ECS_CHILDOF = MAX_COMPONENT_ID + 2
@@ -216,6 +221,16 @@ local function FIND_INSERT(ids: { u53 }, added: u53)
 		end
 	end
 	return #ids + 1
+end
+
+local function SET_COMPONENT_BITSETS(component_bitsets: Map<number, Bitset>, id: number)
+	local bit = id - 1
+	local bitset_page = bit // BITSET_RANGE
+	local bit_index = bit - (bitset_page * BITSET_RANGE)
+
+	local bitset_index = bitset_page + 1
+	local bitset = component_bitsets[bitset_index] or 0
+	component_bitsets[bitset_index] = bit32.bor(bitset, bit32.lshift(1, bit_index))
 end
 
 local CHECK_FLAG = bit32.btest
@@ -277,17 +292,46 @@ local function query_new(world: World, ...: u53): Query<any>
 	local components_lookup = world.components_lookup
 
 	local terms = { ... }
+
 	local with_ids = { ... }
-	local without_ids: { number }? = nil
+	local without_ids: { number }
+
+	local with_bitsets: Map<number, Bitset> = {}
+	local without_bitsets: Map<number, Bitset> = {}
+	local with_bitsets_active = false
+	local without_bitsets_active = false
+
+	local with_sparse: { u53 } = {}
+	local without_sparse: { u53 } = {}
+	local with_sparse_active = false
+	local without_sparse_active = false
 
 	local compatible_archetypes: { Archetype } = nil :: any
 	local compatible_archetypes_map: { [ArchetypeId]: number } = {}
 
 	local is_cached = false
 
+	local query = {
+		with_ids = with_ids,
+		without_ids = without_ids,
+		terms = terms,
+	}
+
 	local function find_compatible_archetypes(): { Archetype }
 		local best_record: ComponentRecord? = nil
 		local best_record_count = math.huge
+		local archetypes = world.archetypes
+		local compatible = {}
+
+		local with_bitsets_inner = with_bitsets
+		local without_bitsets_inner = without_bitsets
+		local with_bitsets_active_inner = with_bitsets_active
+		local without_bitsets_active_inner = without_bitsets_active
+
+		local with_sparse_inner = with_sparse
+		local without_sparse_inner = without_sparse
+		local with_sparse_active_inner = with_sparse_active
+		local without_sparse_active_inner = without_sparse_active
 
 		for _, id in with_ids do
 			local record = components_lookup[id]
@@ -300,21 +344,19 @@ local function query_new(world: World, ...: u53): Query<any>
 				best_record_count = archetype_count
 			end
 		end
-		local compatible: { Archetype } = {}
 
 		if best_record == nil then
 			return compatible
 		end
 
-		for archetype in best_record.column_index do
-			if not archetype.alive then
-				continue
-			end
-
-			local columns_map = archetype.columns_map
+		for archetype_id in best_record.column_index do
+			local archetype = archetypes[archetype_id]
+			local component_bitsets = archetype.component_bitsets
+			--local columns_map = archetype.columns_map
 			local skip = false
-			for _, component in with_ids do
-				if not columns_map[component] then
+			for index, bitset in with_bitsets_inner do
+				local check_bitset = component_bitsets[index]
+				if check_bitset == 0 or bit32.band(bitset, check_bitset) ~= bitset then
 					skip = true
 					break
 				end
@@ -323,17 +365,42 @@ local function query_new(world: World, ...: u53): Query<any>
 				continue
 			end
 
-			if without_ids then
-				for _, component in without_ids do
-					if columns_map[component] then
-						skip = true
-						break
-					end
+			for index, bitset in without_bitsets_inner do
+				local check_bitset = component_bitsets[index]
+				if check_bitset == 0 then
+					continue
+				end
+
+				if bit32.band(bitset, check_bitset) ~= 0 then
+					skip = true
+					break
+				end
+			end
+
+			if skip then
+				continue
+			end
+
+			--[[for _, component in with_sparse_inner do
+				if not columns_map[component] then
+					skip = true
+					break
+				end
+			end
+
+			if skip then
+				continue
+			end
+
+			for _, component in without_sparse_inner do
+				if columns_map[component] then
+					skip = true
+					break
 				end
 			end
 			if skip then
 				continue
-			end
+			end]]
 
 			table.insert(compatible, archetype)
 		end
@@ -359,9 +426,26 @@ local function query_new(world: World, ...: u53): Query<any>
 		return true
 	end
 
+	local function recalculate_with_bitsets()
+		for _, id in with_ids do
+			if id <= BITSET_MAX_ID then
+				with_bitsets_active = true
+				SET_COMPONENT_BITSETS(with_bitsets, id)
+			else
+				with_sparse_active = true
+				table.insert(with_sparse, id)
+			end
+		end
+	end
+
 	local function query_with(...: u53)
 		local ids = { ... }
 		table.move(ids, 1, #ids, #with_ids + 1, with_ids)
+		table.clear(with_bitsets)
+		table.clear(with_sparse)
+
+		recalculate_with_bitsets()
+		return query
 	end
 
 	local function query_without(...: u53)
@@ -371,6 +455,20 @@ local function query_new(world: World, ...: u53): Query<any>
 		else
 			without_ids = ids
 		end
+		table.clear(without_bitsets)
+		table.clear(without_sparse)
+
+		for _, id in without_ids do
+			if id <= BITSET_MAX_ID then
+				without_bitsets_active = true
+				SET_COMPONENT_BITSETS(without_bitsets, id)
+			else
+				without_sparse_active = true
+				table.insert(without_sparse, id)
+			end
+		end
+
+		return query
 	end
 
 	local function query_archetypes(): { Archetype }
@@ -454,7 +552,7 @@ local function query_new(world: World, ...: u53): Query<any>
 
 	local query_iter_next
 
-	local function query_iter()
+	local function query_iter(): () -> any
 		iter_archetype_index = 1
 		compatible_archetypes = query_archetypes()
 		iter_archetype = compatible_archetypes[iter_archetype_index]
@@ -806,19 +904,14 @@ local function query_new(world: World, ...: u53): Query<any>
 		end
 	end
 
-	local query = {
-		with_ids = with_ids,
-		without_ids = without_ids,
-		terms = terms,
+	query.cached = query_cached
+	query.match = query_match
+	query.archetypes = query_archetypes
+	query.with = query_with
+	query.without = query_without
+	query.iter = query_iter
 
-		cached = query_cached,
-		match = query_match,
-		archetypes = query_archetypes,
-		with = query_with,
-		without = query_without,
-		iter = query_iter,
-	}
-
+	recalculate_with_bitsets()
 	return query :: any
 end
 
@@ -847,11 +940,13 @@ local function world_new()
 	local ROOT_ARCHETYPE: Archetype = {
 		archetype_id = archetypes_count,
 		hash = "",
+		alive = false,
 
 		entities = {},
 		columns = {},
 		components = {},
 
+		component_bitsets = table.create(BITSET_PAGE_SIZE, 0),
 		columns_map = {},
 		forward_edges = {},
 		backward_edges = {},
@@ -1023,16 +1118,20 @@ local function world_new()
 		end
 	end
 
-	local function archetype_append_to_record(record: ComponentRecord, archetype: Archetype, index: number): boolean
+	local function archetype_append_to_record(
+		record: ComponentRecord,
+		archetype_id: ArchetypeId,
+		index: number
+	): boolean
 		local column_index = record.column_index
 		local id_count = record.id_count
 
-		if not column_index[archetype] then
-			column_index[archetype] = index
-			id_count[archetype] = 1
+		if not column_index[archetype_id] then
+			column_index[archetype_id] = index
+			id_count[archetype_id] = 1
 			return true
 		else
-			id_count[archetype] += 1
+			id_count[archetype_id] += 1
 			return false
 		end
 	end
@@ -1174,6 +1273,7 @@ local function world_new()
 		local columns = table.create(columns_length) :: { Column }
 
 		local columns_map: Map<u53, Column> = {}
+		local component_bitsets = table.create(BITSET_PAGE_SIZE, 0)
 
 		local archetype: Archetype = {
 			archetype_id = archetype_id,
@@ -1184,6 +1284,7 @@ local function world_new()
 			columns = columns,
 			components = ids,
 
+			component_bitsets = component_bitsets,
 			columns_map = columns_map,
 			forward_edges = {},
 			backward_edges = {},
@@ -1198,7 +1299,11 @@ local function world_new()
 			columns[index] = column
 			columns_map[id] = column
 
-			archetype_append_to_record(id_record, archetype, index)
+			archetype_append_to_record(id_record, archetype_id, index)
+
+			if id <= BITSET_MAX_ID then
+				SET_COMPONENT_BITSETS(component_bitsets, id)
+			end
 
 			if IS_PAIR(id) then
 				local relation = PAIR_FIRST(id)
@@ -1208,7 +1313,7 @@ local function world_new()
 				local relation_record = component_record_ensure(relation_wildcard)
 				relation_record.archetype_count += 1
 
-				local relation_appended = archetype_append_to_record(relation_record, archetype, index)
+				local relation_appended = archetype_append_to_record(relation_record, archetype_id, index)
 				if relation_appended then
 					columns_map[relation_wildcard] = column
 				end
@@ -1226,7 +1331,7 @@ local function world_new()
 				local target_record = component_record_ensure(target_wildcard)
 				target_record.archetype_count += 1
 
-				local target_apended = archetype_append_to_record(target_record, archetype, index)
+				local target_apended = archetype_append_to_record(target_record, archetype_id, index)
 				if target_apended then
 					columns_map[target_wildcard] = column
 				end
@@ -1235,6 +1340,7 @@ local function world_new()
 
 		archetypes[archetype_id] = archetype
 		archetypes_lookup[hash] = archetype
+
 		return archetype
 	end
 
@@ -1468,6 +1574,7 @@ local function world_new()
 
 		entity = world_entity,
 		component = world_component,
+		tag = world_tag,
 
 		add = world_add,
 		set = world_set,

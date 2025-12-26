@@ -1,14 +1,14 @@
 --!optimize 2
 --!native
 
-local ReplicatedStorage = game:GetService "ReplicatedStorage"
+local ServerScriptService = game:GetService "ServerScriptService"
 
-local jecs = require(ReplicatedStorage.ecs.tests.jecs)
-local ecs = require(ReplicatedStorage.ecs.ecs)
+local jecs = require(ServerScriptService.ecs.tests.jecs)
+local ecs = require(ServerScriptService.ecs.ecs)
 
 if game then
-	jecs = require(ReplicatedStorage.ecs.tests.jecs:Clone()) :: typeof(jecs)
-	ecs = require(ReplicatedStorage.ecs.ecs:Clone()) :: typeof(ecs)
+	jecs = require(ServerScriptService.ecs.tests.jecs:Clone()) :: typeof(jecs)
+	ecs = require(ServerScriptService.ecs.ecs:Clone()) :: typeof(ecs)
 end
 
 local jecs_world = jecs.world()
@@ -83,13 +83,11 @@ return {
 
 	Functions = {
 		ecs = function()
-			for entity, first, second in ecs_world.query(E2, E4, E6, E8).iter() do
-			end
+			ecs_world.query(E2, E4, E6, E8).archetypes()
 		end,
 
 		jecs = function()
-			for entity, first, second in jecs_world:query(D2, D4, D6, D8):iter() do
-			end
+			jecs_world:query(D2, D4, D6, D8):archetypes()
 		end,
 	},
 }

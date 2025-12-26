@@ -2,8 +2,8 @@
 	"name": "ecs",
 	"tree": {
 		"$className": "DataModel",
-		"ReplicatedStorage": {
-			"$className": "ReplicatedStorage",
+		"ServerScriptService": {
+			"$className": "ServerScriptService",
 			"ecs": {
 				"$className": "Folder",
 				"ecs": {
