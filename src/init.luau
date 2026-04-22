@@ -275,6 +275,7 @@ export type World = {
 	parent: (child: Entity) -> Entity,
 	children: (parent: Entity) -> () -> Entity,
 	target: (entity: Entity, relation: Id, index: number?) -> Entity,
+	traverse: <T>(entity: Entity, relation: Id, id: Component<T>) -> (Entity, T),
 	pairs: (entity: Entity, relation: Id) -> () -> Entity,
 
 	add: (entity: Entity, id: Component) -> (),
@@ -369,7 +370,7 @@ local ECS_ON_DELETE = 		   MAX_COMPONENT_ID +  8
 local ECS_ERROR = 			   MAX_COMPONENT_ID +  9
 local ECS_TRAVERSABLE = 	   MAX_COMPONENT_ID + 10
 local ECS_DISABLED = 		   MAX_COMPONENT_ID + 11
-local ECS_PAIR_IS_TAG = 	   MAX_COMPONENT_ID + 12
+local ECS_FORCE_TAG = 	   MAX_COMPONENT_ID + 12
 local ECS_REST = 			   MAX_COMPONENT_ID + 13
 -- stylua: ignore end
 
@@ -3151,7 +3152,7 @@ local function world_new()
 	end
 
 	local function check_is_component(relation: u53, target: u53?)
-		if target and world_has(relation, ECS_PAIR_IS_TAG) then
+		if target and world_has(relation, ECS_FORCE_TAG) then
 			return false
 		end
 
@@ -3479,8 +3480,9 @@ local function world_new()
 				end
 			end
 			entities[last_row] = nil
-
-			archetype.alive = false
+			if last_row == 1 then
+				archetype.alive = false
+			end
 		else
 			-- swap column, and delete last
 			local swap_record = get_entity_record(swap :: any)
@@ -3667,15 +3669,15 @@ local function world_new()
 	end
 
 	local function archetype_find_without(source: Archetype, id: u53)
-		local edges = source.backwards_edges
-		local destination = edges[id]
+		local backwards_edges = source.backwards_edges
+		local destination = backwards_edges[id]
 		if not destination then
 			local destination_components = table.clone(source.components)
 			local remove_at = table.find(destination_components, id)
 			table.remove(destination_components, remove_at)
 
 			local found = archetype_ensure(destination_components)
-			edges[id] = found
+			backwards_edges[id] = found
 			found.forward_edges[id] = source
 			return found
 		end
@@ -4588,6 +4590,32 @@ local function world_new()
 		return get_entity_alive(PAIR_SECOND(id))
 	end
 
+	local function world_traverse(entity: u53, relation: u53, id: u53): (u53?, any?)
+		local record = get_entity_record_alive(entity)
+		if not record then
+			return nil, nil
+		end
+		local relation_wildcard = ECS_PAIR(relation, ECS_WILDCARD)
+		local component_record = components_lookup[relation_wildcard]
+		local archetype: Archetype = record.archetype
+
+		while true do
+			local index = component_record.column_index[archetype.archetype_id]
+			if not index then
+				return nil, nil
+			end
+
+			local target_record = get_entity_record(PAIR_SECOND(archetype.components[index])) :: EntityRecord
+			local target_archetype = target_record.archetype
+			local column = target_archetype.columns_map[id]
+
+			if column then
+				return dense_arr[target_record.dense], column[target_record.archetype_row]
+			end
+			archetype = target_archetype
+		end
+	end
+
 	local function world_target(entity: u53, relation: u53, index: number?): u53?
 		local record = get_entity_record_alive(entity)
 		if not record then
@@ -4629,6 +4657,7 @@ local function world_new()
 		end
 
 		local archetype = record.archetype
+
 		local archetype_id = archetype.archetype_id
 		local pairs_count = pair_record.pairs_count[archetype_id]
 
@@ -4670,7 +4699,7 @@ local function world_new()
 		return function(): u53
 			local entity = entities[row]
 			while not entity do
-				archetype_id = next(archetypes, archetype_id) :: number
+				archetype_id = next(component_archetypes, archetype_id) :: number
 				if not archetype_id then
 					return nil :: any
 				end
@@ -4969,6 +4998,9 @@ return {
 	changed = ANY(PREREGISTER_CHANGED_HOOK) :: <T>(Component<T>, PreregisteredSetHook<T>) -> Cleanup,
 	removed = ANY(PREREGISTER_REMOVED_HOOK) :: <T>(Component<T>, PreregisteredRemovedHook<T>) -> Cleanup,
 
+	PAIR_FIRST = PAIR_FIRST,
+	PAIR_SECOND = PAIR_SECOND,
+
 	Rest = ANY(ECS_REST) :: Entity,
 	ChildOf = ANY(ECS_CHILDOF) :: Entity,
 	Name = ANY(ECS_NAME) :: Component<string>,
@@ -4977,7 +5009,7 @@ return {
 	OnDeleteTarget = ANY(ECS_ON_DELETE_TARGET) :: Entity,
 	Wildcard = ANY(ECS_WILDCARD) :: Entity,
 	Delete = ANY(ECS_DELETE) :: Entity,
-	PairIsTag = ANY(ECS_PAIR_IS_TAG) :: Entity,
+	ForceTag = ANY(ECS_FORCE_TAG) :: Entity,
 	Error = ANY(ECS_ERROR) :: Entity,
 	Traversable = ANY(ECS_TRAVERSABLE) :: Entity,
 	Disabled = ANY(ECS_DISABLED) :: Entity,
